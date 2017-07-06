@@ -16,7 +16,7 @@ Runstrings:
    Show only your user-created modules, not system-provided modules.
 
 %(scriptName)s  --one_line  file1 [file2 ...]
-   Instead of the default nested tree, display all of the module paths on one line for piping into annother command.
+   Instead of the default nested tree, display all of the module paths on one line for piping into another command.
 
 Typical real runstring:
 
@@ -84,18 +84,20 @@ def module_tree(indent='', module_name=''):
     if VIRTUAL_ENV != '':
         VIRTUAL_ENV = '|^' + VIRTUAL_ENV
 
-    if '.py' not in module_path or re.search('^sys|^/usr'+VIRTUAL_ENV, module_path):
+    if '.py' not in module_path:
         return
 
     if not os.path.exists(module_path):
         return
 
-    if options.get('--user_created', False) == True:
-        # print(77, module_path)
-        if '.py' in module_path and not re.search('^sys|^/usr'+VIRTUAL_ENV, module_path):
-            import_list.append(indent + module_path)
-    else:
+    # print(77, module_path)
+    if not re.search('^sys|^/usr'+VIRTUAL_ENV, module_path):
         import_list.append(indent + module_path)
+    else:
+        if options.get('--user_created', False) == False:
+            import_list.append(indent + module_path)
+        return
+    # print(79, module_path) 
 
     path_list = list(path_list_orig)
     ignore_comment = False
