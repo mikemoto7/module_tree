@@ -5,11 +5,13 @@
 
 Description:
 
-Given the name of a .py file, recursively search through the file and below for all modules and display their path names.
+Given the name of a .py file, recursively search through the file and below for all modules and display their path names.  Given the name of a ddirectory, do the same search for all scripts in the directory and below.
 
 Runstrings:
 
 %(scriptName)s  file1 [file2 ...]
+%(scriptName)s  dir1 [dir2 ...]
+%(scriptName)s  file1 dir1 [...]  # a mix of files and directories
    By default, show all modules.  The display is a nested indented tree.
 
 %(scriptName)s  --user_created file1 [file2 ...]
@@ -17,6 +19,10 @@ Runstrings:
 
 %(scriptName)s  --one_line  file1 [file2 ...]
    Instead of the default nested tree, display all of the module paths on one line for piping into another command.
+
+%(scriptName)s  --do_not_report_missing file1 [file2 ...]
+   The default behavior is to report missing modules.  Using this option, missing modules will not be reported.  But they will still be displayed in the output.
+
 
 Typical real runstring:
 
@@ -26,16 +32,19 @@ Typical real runstring:
 
 
 import os, sys, re
-
-sys.path.append('lib')
-sys.path.append('bin')
-
-from logging_wrappers import logging_setup, scriptName, reportError
-
 import getopt
 import logging
 
 import imp
+# import import_lib  # not available yet
+
+scriptDir = os.path.dirname(os.path.realpath(sys.argv[0]))
+sys.path.append(scriptDir+'/lib')
+sys.path.append(scriptDir+'/bin')
+
+from logging_wrappers import logging_setup, scriptName, reportError
+from dir_tree import dir_tree
+
 
 
 
@@ -50,62 +59,81 @@ def usage():
 
 #====================================================
 
-def module_tree(indent='', module_name=''):
+global import_list
+import_list = []
+
+def module_tree_for_dir_tree(fullfilename='', indent='', module_filename=''):
+    # print(62, "module_tree_for_dir_tree", fullfilename, indent, module_filename)
+    rc, results = module_tree(indent, module_filename=fullfilename)
+    return rc, results
+
+
+
+def module_tree(indent='', module_filename=''):
     global import_list
+    global path_list_orig
 
-    # if os.path.exists(module_name):
-
-    # print(58, module_name)
-
-    if options.get('--debug', False) == True: print(33, module_name, "xxx" + indent + "yyy")
-
-    if indent != '':
-        # print(63, imp.find_module(module_name))
-        module_path = imp.find_module(module_name)[1]
-        if options.get('--debug', False) == True: print(36, module_path)
-        if module_path == None:
-            return
-        # module_path = imp.find_module(module_name.replace('.py', ''))[1]
-        # module_path = imp.find_module(module_name)[1]
-        # if not os.path.exists(module_path):
-        #    return
-    else:
-        module_path = module_name
-
-    # print(72, module_path)
-
-    # else:
-    #    import_list.append(indent + module_name + " - not_found")
-    #    return
-
-    if options.get('--debug', False) == True: print(52, module_path)
+    not_found_flag = ''
 
     VIRTUAL_ENV = os.environ.get('VIRTUAL_ENV','')
+
+    if indent == '':  # top level
+        sys.path.append(os.path.dirname(module_filename))
+        path_list_orig = list(sys.path)  # Use the same starting list of paths for each module file name search
+
+        if not os.path.exists(module_filename):
+            if options.get('--do_not_report_missing', False) == False:
+                not_found_flag = ',NOT_FOUND'
+    else:  # From imports in scripts
+        # print(117, module_filename, not_found_flag, sys.path)
+        sys.path = path_list_orig
+        not_found_flag = ',NOT_FOUND'
+        for module_path in sys.path:
+            if os.path.exists(module_path + '/' + module_filename):
+                module_filename = module_path + '/' + module_filename
+                not_found_flag = ''
+                break
+            module_name = module_filename.replace('.py', '')
+            if os.path.isdir(module_path + '/' + module_name):
+                module_filename = module_path + '/' + module_name
+                not_found_flag = ''
+                break
+            try:
+                module_object = imp.find_module(module_name)
+                # print(103, module_object)
+                if module_object[1] != None:
+                    module_filename = module_object[1]
+                    not_found_flag = ''
+                break
+            except ImportError as err:
+                continue
+
     if VIRTUAL_ENV != '':
         VIRTUAL_ENV = '|^' + VIRTUAL_ENV
-
-    if '.py' not in module_path:
-        return
-
-    if not os.path.exists(module_path):
-        return
-
-    # print(77, module_path)
-    if not re.search('^sys|^/usr'+VIRTUAL_ENV, module_path):
-        import_list.append(indent + module_path)
+        
+    if not re.search('^sys|^/usr'+VIRTUAL_ENV, module_filename):
+        # This is a user-created module, so remember it.
+        import_list.append(indent + module_filename + not_found_flag)
     else:
+        # This is a system module.
         if options.get('--user_created', False) == False:
-            import_list.append(indent + module_path)
-        return
-    # print(79, module_path) 
+            # The user did not ask for user-created modules only, so remember this system module.
+            import_list.append(indent + module_filename + not_found_flag)
+        return 0, 'system module'  # Don't go any deeper into a system module.
+    # print(79, module_filename) 
 
-    path_list = list(path_list_orig)
+    # if '.py' not in module_filename:
+    #     return 0, '.py not in module_filename'
+
+    if not os.path.exists(module_filename):
+        return 0, module_filename + ' does not exist'
+
     ignore_comment = False
 
     indent += '   '
     fileline = 0
     # print "Processing file: " + file
-    fd = open(module_path, 'r')
+    fd = open(module_filename, 'r')
     for line in fd.read().splitlines():
         fileline += 1
         if re.search('"""', line) or re.search("'''", line):
@@ -117,36 +145,36 @@ def module_tree(indent='', module_name=''):
         found = re.search('sys.path.append\([\'\"]*([^\'\"\)]+)[^\'\"]*\)', line)
         if found:
             new_path = found.group(1)
-            if new_path not in path_list:
+            if new_path not in sys.path:
                 # print "Adding new_path: " + new_path
                 sys.path.append(new_path)
-                path_list.append(new_path)
             continue
 
         found = re.search('^ *from ([^ ]+) import', line)
         if found:
-            module_name = found.group(1)
-            if module_name not in import_list:
-                # import_list.append(indent + module_name)
-                module_tree(indent, module_name)
+            module_filename = found.group(1) + '.py'
+            if module_filename not in import_list:
+                # import_list.append(indent + module_filename)
+                module_tree(indent, module_filename)
             continue
 
         found = re.search('^ *import (.*)', line)
         if found:
-            for module_name in [x.strip() for x in found.group(1).split(',')]:
-                module_name = module_name.split(' ')[0]
-                module_name = module_name.split('.')[0]
-                # print(126, module_name)
-                if module_name not in import_list:
-                    # import_list.append(indent + module_name)
-                    if options.get('--debug', False) == True: print(96, module_name)
-                    module_tree(indent, module_name)
-                    if options.get('--debug', False) == True: print(98, module_name)
+            for module_filename in [x.strip() for x in found.group(1).split(',')]:
+                module_filename = module_filename.split(' ')[0]
+                module_filename = module_filename.split('.')[0]
+                module_filename += '.py'
+                # print(126, module_filename)
+                if module_filename not in import_list:
+                    # import_list.append(indent + module_filename)
+                    if options.get('--debug', False) == True: print(96, module_filename)
+                    module_tree(indent, module_filename)
+                    if options.get('--debug', False) == True: print(98, module_filename)
             continue
 
     fd.close()
 
-
+    return 0, 'success'
 
 #====================================================
 
@@ -156,7 +184,7 @@ if __name__ == '__main__':
         usage()
 
     try:
-        opts, args = getopt.getopt(sys.argv[1:], "", ["debug", "user_created", "one_line"])
+        opts, args = getopt.getopt(sys.argv[1:], "", ["debug", "user_created", "one_line", "do_not_report_missing"])
     except getopt.GetoptError as err:
         reportError("Unrecognized runstring " + str(err))
         usage()
@@ -170,6 +198,8 @@ if __name__ == '__main__':
             options[opt] = True
         elif opt == "--one_line":
             options[opt] = True
+        elif opt == "--do_not_report_missing":
+            options[opt] = True
         elif opt == "--debug":
             options[opt] = True
         else:
@@ -179,31 +209,55 @@ if __name__ == '__main__':
     # print(sys.modules)
     # sys.exit(1)
 
-    path_list_orig = list(sys.path)
+    # curr_dir = os.getcwd()
 
-    files=args
+    path_list_orig = list(sys.path)  # Use the same starting list of paths for each module file name search
 
-    for filename in files:
-        fileline = 0
+    files_or_dirs=args
 
+    for file_or_dir_name in files_or_dirs:
         sys.path = list(path_list_orig)
-        sys.path.insert(0, os.path.dirname(filename))
-        # print sys.path
 
-        import_list = []
-        module_tree('', filename)
+        # sys.path.insert(0, curr_dir)
+
+        # dirpath = os.path.dirname(file_or_dir_name)
+        # if dirpath[0] != '/':
+        #     dirpath = curr_dir + '/' + dirpath
+        #     # file_or_dir_name = curr_dir + '/' + file_or_dir_name
+        # sys.path.insert(0, dirpath)
+        # # print(219, sys.path)
+
+        if os.path.isdir(file_or_dir_name):
+            # print(213, file_or_dir_name)
+            # dir_tree( start_dir=file_or_dir_name, filename_mask='.py', func=module_tree, indent='', module_filename=file_or_dir_name)
+            # dir_tree( start_dir=file_or_dir_name, filename_mask='.py', func=module_tree, args=[indent='', module_filename=file_or_dir_name])
+            rc, results = dir_tree( start_dir=file_or_dir_name, filename_mask='\.py$', func=module_tree_for_dir_tree, indent='', module_filename=file_or_dir_name)
+            # rc, results = dir_tree( start_dir=file_or_dir_name, filename_mask='\.py$')
+            if rc != 0:
+                print("line", 220, "ERROR", results)
+                sys.exit(rc)
+            # for row in results:
+            #     print(row)
+        else:
+            fileline = 0
+            module_tree('', file_or_dir_name)
 
         processed_list = []
         separator = ''
         if options.get('--one_line', False) == True:
-            for module_name in import_list:
-                # print 156, module_name
-                module_name_no_indent = module_name.strip()
-                if module_name_no_indent not in processed_list:
-                    sys.stdout.write(separator + module_name_no_indent)
+            for module_filename in import_list:
+                # print 156, module_filename
+                module_filename_no_indent = module_filename.strip()
+                if module_filename_no_indent not in processed_list:
+                    sys.stdout.write(separator + module_filename_no_indent)
                     separator = ' '
-                    processed_list.append(module_name_no_indent)
+                    processed_list.append(module_filename_no_indent)
             print
         else:
             for row in import_list:
                 print(row)
+
+
+
+
+
